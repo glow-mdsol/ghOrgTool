@@ -5,3 +5,6 @@ coverage.out
 
 # Ignore the vendor directory
 vendor/
+
+# Local git worktrees
+.worktrees/
