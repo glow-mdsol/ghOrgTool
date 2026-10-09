@@ -7,6 +7,62 @@ import (
 )
 
 // ---------------------------------------------------------------------------
+// URL normalization
+// ---------------------------------------------------------------------------
+
+func TestDecomposeGithubURL_RepositoryURL(t *testing.T) {
+	components, err := decomposeGithubURL("https://github.com/example-org/my-repo")
+	if err != nil {
+		t.Fatalf("decomposeGithubURL returned error: %v", err)
+	}
+	if components.orgName == nil || *components.orgName != "example-org" {
+		t.Fatalf("orgName = %v, want %q", components.orgName, "example-org")
+	}
+	if components.repoName == nil || *components.repoName != "my-repo" {
+		t.Fatalf("repoName = %v, want %q", components.repoName, "my-repo")
+	}
+}
+
+func TestDecomposeGithubURL_UserURL(t *testing.T) {
+	components, err := decomposeGithubURL("https://github.com/someuser")
+	if err != nil {
+		t.Fatalf("decomposeGithubURL returned error: %v", err)
+	}
+	if components.userName == nil || *components.userName != "someuser" {
+		t.Fatalf("userName = %v, want %q", components.userName, "someuser")
+	}
+}
+
+func TestDecomposeGithubURL_TeamURL(t *testing.T) {
+	components, err := decomposeGithubURL("https://github.com/orgs/example-org/teams/platform-engineering")
+	if err != nil {
+		t.Fatalf("decomposeGithubURL returned error: %v", err)
+	}
+	if components.orgName == nil || *components.orgName != "example-org" {
+		t.Fatalf("orgName = %v, want %q", components.orgName, "example-org")
+	}
+	if components.teamName == nil || *components.teamName != "platform-engineering" {
+		t.Fatalf("teamName = %v, want %q", components.teamName, "platform-engineering")
+	}
+}
+
+func TestNormalizeEntityArgument_SlackWrappedURL(t *testing.T) {
+	arg := "<https://github.com/example-org/my-repo|my-repo>"
+	got := normalizeEntityArgument(arg)
+	if got != "my-repo" {
+		t.Fatalf("normalizeEntityArgument(%q) = %q, want %q", arg, got, "my-repo")
+	}
+}
+
+func TestNormalizeEntityArgument_NonURLUnchanged(t *testing.T) {
+	arg := "plain-entity"
+	got := normalizeEntityArgument(arg)
+	if got != arg {
+		t.Fatalf("normalizeEntityArgument(%q) = %q, want %q", arg, got, arg)
+	}
+}
+
+// ---------------------------------------------------------------------------
 // contains
 // ---------------------------------------------------------------------------
 

@@ -17,7 +17,7 @@ It will use the SSO connection to link a user email to an account, but the user 
   ```
 * Install the tool
   ```
-  go install github.com/glow-example-org/ghOrgTool@latest
+  go install github.com/glow-mdsol/ghOrgTool@latest
   ```
 * Add your GOBIN path to your path, by adding the following to your `~/.zshrc` or `~/.bashrc`
   ```

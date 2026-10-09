@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
 	"os/user"
 	"path/filepath"
@@ -151,6 +152,101 @@ func userIsValid(ctx context.Context, client *github.Client, tc *http.Client, us
 	return true, ghUser
 }
 
+type githubURLComponents struct {
+	orgName  *string
+	repoName *string
+	teamName *string
+	userName *string
+}
+
+// decomposeGithubURL splits a GitHub URL into its components.
+func decomposeGithubURL(rawURL string) (githubURLComponents, error) {
+	cleaned := strings.TrimSpace(rawURL)
+	if cleaned == "" {
+		return githubURLComponents{}, fmt.Errorf("invalid GitHub URL: %s", rawURL)
+	}
+
+	// Slack often wraps pasted links as <url|label> or <url>.
+	if strings.HasPrefix(cleaned, "<") && strings.HasSuffix(cleaned, ">") {
+		cleaned = strings.TrimPrefix(strings.TrimSuffix(cleaned, ">"), "<")
+	}
+	if pipeIndex := strings.Index(cleaned, "|"); pipeIndex != -1 {
+		cleaned = cleaned[:pipeIndex]
+	}
+
+	if !strings.Contains(cleaned, "://") {
+		cleaned = "https://" + cleaned
+	}
+
+	parsed, err := url.Parse(cleaned)
+	if err != nil {
+		return githubURLComponents{}, fmt.Errorf("invalid GitHub URL: %s", rawURL)
+	}
+
+	if !strings.EqualFold(parsed.Hostname(), "github.com") {
+		return githubURLComponents{}, fmt.Errorf("unsupported host for GitHub URL: %s", rawURL)
+	}
+
+	path := strings.Trim(parsed.Path, "/")
+	if path == "" {
+		return githubURLComponents{}, fmt.Errorf("invalid GitHub URL: %s", rawURL)
+	}
+
+	segments := strings.Split(path, "/")
+	for i, segment := range segments {
+		decoded, decodeErr := url.PathUnescape(segment)
+		if decodeErr == nil {
+			segments[i] = decoded
+		}
+	}
+
+	switch {
+	case len(segments) >= 4 && segments[0] == "orgs" && segments[2] == "teams":
+		org := segments[1]
+		team := segments[3]
+		return githubURLComponents{orgName: &org, teamName: &team}, nil
+	case len(segments) >= 2 && segments[0] == "orgs":
+		org := segments[1]
+		return githubURLComponents{orgName: &org}, nil
+	case len(segments) >= 2:
+		org := segments[0]
+		repo := segments[1]
+		return githubURLComponents{orgName: &org, repoName: &repo}, nil
+	case len(segments) == 1:
+		user := segments[0]
+		return githubURLComponents{userName: &user}, nil
+	default:
+		return githubURLComponents{}, fmt.Errorf("invalid GitHub URL: %s", rawURL)
+	}
+}
+
+func normalizeEntityArgument(arg string) string {
+	trimmed := strings.TrimSpace(arg)
+	if trimmed == "" {
+		return trimmed
+	}
+
+	components, err := decomposeGithubURL(trimmed)
+	if err != nil {
+		return trimmed
+	}
+
+	if components.repoName != nil && *components.repoName != "" {
+		return *components.repoName
+	}
+	if components.userName != nil && *components.userName != "" {
+		return *components.userName
+	}
+	if components.teamName != nil && *components.teamName != "" {
+		return *components.teamName
+	}
+	if components.orgName != nil && *components.orgName != "" {
+		return *components.orgName
+	}
+
+	return trimmed
+}
+
 // Go time!
 func main() {
 	ORG = getOrgLogin()
@@ -288,6 +384,10 @@ func main() {
 		os.Exit(0)
 	}
 	var userOrRepoList = flag.Args()
+	for i, arg := range userOrRepoList {
+		userOrRepoList[i] = normalizeEntityArgument(arg)
+	}
+	*repoName = normalizeEntityArgument(*repoName)
 
 	// create a connection
 	ctx, tc, client := connect()
