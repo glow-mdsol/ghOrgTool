@@ -8,3 +8,6 @@ vendor/
 
 # Local git worktrees
 .worktrees/
+
+.claude
+
