@@ -203,7 +203,9 @@ Usage of the tool is pretty simple
   -S, --list-actions-storage
       List top 10 repositories by Actions cache usage and org billable constrained storage
   -G, --recent-admin-grants
-      List users granted admin access to any org repo in the last 24h that still have that access
+      List users granted admin access to any org repo in the lookback window that still have that access
+  -I, --include-revoked
+      Optional with --recent-admin-grants: list all admin grants in the window, active or revoked
     -M, --recent-admin-removals
       List users recently removed from admin access on any org repo (same lookback window as grants)
   -R, --repo string
@@ -368,20 +370,46 @@ Top 10 repositories by GitHub Actions cache storage in example-org:
 This report uses the organization-level Actions cache usage endpoint, so the GitHub token must have at least `read:org` scope.
 
 #### Recent Admin Grants
-Scan all repositories in the organization for users who were granted direct admin collaborator access in the last 24 hours and who still hold that access. For each match the settings/access URL is printed so you can review or revoke the grant immediately.
+Scan all repositories in the organization for users who were granted direct admin collaborator access in the lookback window (48 hours by default, 72 hours on Mondays so Friday grants are caught) and who still hold that access. Each match shows how long access has been held and the settings/access URL so you can review or revoke the grant.
 
 ```shell
 $ ghOrgTool --recent-admin-grants
-Users granted admin access in the last 24 hours (still active) in example-org:
+Users granted recent admin access (still active) in example-org:
 
 1. alice → sample-orchestrator
   Granted by: org-admin
    Granted: 2026-04-15 09:12:00 UTC
+   Status: active
+   Access held: 5h 48m (so far)
    Access settings: https://github.com/example-org/sample-orchestrator/settings/access
 
 2. bob → sample-api
   Granted by: repo-owner
    Granted: 2026-04-15 14:05:00 UTC
+   Status: active
+   Access held: 0h 55m (so far)
+   Access settings: https://github.com/example-org/sample-api/settings/access
+```
+
+By default only grants that are still active are listed. Add `--include-revoked` to list every admin grant in the window alongside its current status. For revoked grants the matching `repo.remove_member` audit event is used to show how long access was held, so you can check people had time to finish their work before removal:
+
+```shell
+$ ghOrgTool --recent-admin-grants --include-revoked
+Users granted recent admin access in example-org (2 added, 1 still active):
+
+1. alice → sample-orchestrator
+   Granted by: org-admin
+   Granted: 2026-04-15 09:12:00 UTC
+   Status: active
+   Access held: 5h 48m (so far)
+   Access settings: https://github.com/example-org/sample-orchestrator/settings/access
+
+2. carol → sample-api
+   Granted by: repo-owner
+   Granted: 2026-04-15 11:00:00 UTC
+   Status: revoked (current access: write)
+   Revoked: 2026-04-15 11:40:00 UTC
+   Access held: 0h 40m
    Access settings: https://github.com/example-org/sample-api/settings/access
 ```
 
