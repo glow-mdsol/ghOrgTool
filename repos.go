@@ -1010,6 +1010,9 @@ func attachAdminRevocationTimes(ctx context.Context, client *github.Client, org 
 			if len(parts) != 2 || parts[0] != org {
 				continue
 			}
+			if perm, ok := entry.AdditionalFields["permission"].(string); ok && perm != "admin" {
+				continue
+			}
 			idx, ok := pending[parts[1]+":"+entry.GetUser()]
 			if !ok {
 				continue
