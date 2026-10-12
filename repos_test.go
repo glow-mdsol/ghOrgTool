@@ -1620,7 +1620,7 @@ func TestAddUserAsRepoCollaborator_TargetUserRecentAdmin(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestReportRecentAdminGrants_NoResults(t *testing.T) {
-	got := reportRecentAdminGrants("example-org", nil)
+	got := reportRecentAdminGrants("example-org", nil, false)
 	if !strings.Contains(got, "No recent admin access grants detected") {
 		t.Errorf("expected no-results message, got %q", got)
 	}
@@ -1653,9 +1653,11 @@ func TestReportRecentAdminGrants_WithResults(t *testing.T) {
 			actor:     "org-admin",
 			grantedAt: grantedAt,
 			accessURL: "https://github.com/example-org/sample-orchestrator/settings/access",
+			active:    true,
+			heldFor:   26*time.Hour + 5*time.Minute,
 		},
 	}
-	got := reportRecentAdminGrants("example-org", results)
+	got := reportRecentAdminGrants("example-org", results, false)
 	if !strings.Contains(got, "alice") {
 		t.Errorf("expected login 'alice' in output, got %q", got)
 	}
@@ -1671,6 +1673,32 @@ func TestReportRecentAdminGrants_WithResults(t *testing.T) {
 	if !strings.Contains(got, "2026-04-15 10:00:00 UTC") {
 		t.Errorf("expected formatted grant time in output, got %q", got)
 	}
+	if !strings.Contains(got, "Access held: 1d 2h 5m (so far)") {
+		t.Errorf("expected access duration in output, got %q", got)
+	}
+}
+
+func TestReportRecentAdminGrants_IncludeRevoked(t *testing.T) {
+	grantedAt := time.Date(2026, 4, 15, 10, 0, 0, 0, time.UTC)
+	results := []adminGrantResult{
+		{repo: "repo-a", login: "alice", actor: "a", grantedAt: grantedAt, active: true, currentPerm: "admin", heldFor: 3 * time.Hour},
+		{repo: "repo-a", login: "bob", actor: "a", grantedAt: grantedAt, currentPerm: "write", revokedAt: grantedAt.Add(90 * time.Minute), heldFor: 90 * time.Minute},
+		{repo: "repo-b", login: "carol", actor: "a", grantedAt: grantedAt, currentPerm: "none"},
+	}
+	got := reportRecentAdminGrants("example-org", results, true)
+	for _, want := range []string{
+		"3 added, 1 still active",
+		"Status: active",
+		"Access held: 3h 0m (so far)",
+		"Status: revoked (current access: write)",
+		"Revoked: 2026-04-15 11:30:00 UTC",
+		"Access held: 1h 30m",
+		"Access held: unknown (no removal event found)",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("expected %q in output, got %q", want, got)
+		}
+	}
 }
 
 func TestReportRecentAdminGrants_MultipleResults(t *testing.T) {
@@ -1680,7 +1708,7 @@ func TestReportRecentAdminGrants_MultipleResults(t *testing.T) {
 		{repo: "repo-a", login: "bob", actor: "admin-b", grantedAt: now, accessURL: "https://github.com/example-org/repo-a/settings/access"},
 		{repo: "repo-b", login: "carol", actor: "admin-c", grantedAt: now, accessURL: "https://github.com/example-org/repo-b/settings/access"},
 	}
-	got := reportRecentAdminGrants("example-org", results)
+	got := reportRecentAdminGrants("example-org", results, false)
 	if !strings.Contains(got, "alice") || !strings.Contains(got, "bob") || !strings.Contains(got, "carol") {
 		t.Errorf("expected all logins in output, got %q", got)
 	}
@@ -1743,7 +1771,7 @@ func TestFindRecentAdminGrants_AdminGranted(t *testing.T) {
 	client, teardown := newTestClient(mux)
 	defer teardown()
 
-	results, err := findRecentAdminGrants(ctx, client, "example-org")
+	results, err := findRecentAdminGrants(ctx, client, "example-org", false)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -1778,7 +1806,7 @@ func TestFindRecentAdminGrants_NonAdminSkipped(t *testing.T) {
 	client, teardown := newTestClient(mux)
 	defer teardown()
 
-	results, err := findRecentAdminGrants(ctx, client, "example-org")
+	results, err := findRecentAdminGrants(ctx, client, "example-org", false)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -1800,7 +1828,7 @@ func TestFindRecentAdminGrants_EntryTooOld(t *testing.T) {
 	client, teardown := newTestClient(mux)
 	defer teardown()
 
-	results, err := findRecentAdminGrants(ctx, client, "example-org")
+	results, err := findRecentAdminGrants(ctx, client, "example-org", false)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -1826,12 +1854,82 @@ func TestFindRecentAdminGrants_RevokedAccessExcluded(t *testing.T) {
 	client, teardown := newTestClient(mux)
 	defer teardown()
 
-	results, err := findRecentAdminGrants(ctx, client, "example-org")
+	results, err := findRecentAdminGrants(ctx, client, "example-org", false)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if len(results) != 0 {
 		t.Errorf("expected 0 results when access revoked, got %d", len(results))
+	}
+}
+
+func TestFindRecentAdminGrants_IncludeRevoked(t *testing.T) {
+	ctx := context.Background()
+	mux := http.NewServeMux()
+
+	grantedAt := time.Now().Add(-5 * time.Hour).Truncate(time.Millisecond)
+	removedAt := grantedAt.Add(2 * time.Hour)
+	mux.HandleFunc("/orgs/example-org/audit-log", func(w http.ResponseWriter, r *http.Request) {
+		if strings.Contains(r.URL.Query().Get("phrase"), "remove_member") {
+			writeJSON(w, []map[string]interface{}{
+				auditLogEntryWithAction("repo.remove_member", "dave", "example-org/a-repo", "admin", removedAt.UnixMilli()),
+			})
+			return
+		}
+		writeJSON(w, []map[string]interface{}{
+			auditLogEntry("alice", "example-org/a-repo", "admin", grantedAt.UnixMilli()),
+			auditLogEntry("dave", "example-org/a-repo", "admin", grantedAt.UnixMilli()),
+			auditLogEntry("erin", "example-org/a-repo", "admin", grantedAt.UnixMilli()),
+		})
+	})
+	mux.HandleFunc("/repos/example-org/a-repo/collaborators/alice/permission", func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, map[string]interface{}{"permission": "admin", "user": map[string]string{"login": "alice"}})
+	})
+	mux.HandleFunc("/repos/example-org/a-repo/collaborators/dave/permission", func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, map[string]interface{}{"permission": "write", "user": map[string]string{"login": "dave"}})
+	})
+	mux.HandleFunc("/repos/example-org/a-repo/collaborators/erin/permission", func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, `{"message":"Not Found"}`, http.StatusNotFound)
+	})
+	client, teardown := newTestClient(mux)
+	defer teardown()
+
+	results, err := findRecentAdminGrants(ctx, client, "example-org", true)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(results) != 3 {
+		t.Fatalf("len(results) = %d, want 3", len(results))
+	}
+	alice, dave, erin := results[0], results[1], results[2]
+	if !alice.active || alice.heldFor < 5*time.Hour {
+		t.Errorf("alice: active=%v heldFor=%s, want active with >=5h", alice.active, alice.heldFor)
+	}
+	if dave.active || dave.currentPerm != "write" {
+		t.Errorf("dave: active=%v currentPerm=%q, want revoked with write", dave.active, dave.currentPerm)
+	}
+	if dave.heldFor != 2*time.Hour || !dave.revokedAt.Equal(removedAt) {
+		t.Errorf("dave: heldFor=%s revokedAt=%s, want 2h at %s", dave.heldFor, dave.revokedAt, removedAt)
+	}
+	if erin.active || erin.currentPerm != "none" || !erin.revokedAt.IsZero() {
+		t.Errorf("erin: active=%v currentPerm=%q revokedAt=%s, want revoked/none/zero", erin.active, erin.currentPerm, erin.revokedAt)
+	}
+}
+
+func TestFormatAccessDuration(t *testing.T) {
+	tests := []struct {
+		in   time.Duration
+		want string
+	}{
+		{0, "0h 0m"},
+		{-time.Minute, "0h 0m"},
+		{90*time.Minute + 30*time.Second, "1h 30m"},
+		{49*time.Hour + 7*time.Minute, "2d 1h 7m"},
+	}
+	for _, tt := range tests {
+		if got := formatAccessDuration(tt.in); got != tt.want {
+			t.Errorf("formatAccessDuration(%s) = %q, want %q", tt.in, got, tt.want)
+		}
 	}
 }
 
@@ -1855,7 +1953,7 @@ func TestFindRecentAdminGrants_DuplicateEntryDeduped(t *testing.T) {
 	client, teardown := newTestClient(mux)
 	defer teardown()
 
-	results, err := findRecentAdminGrants(ctx, client, "example-org")
+	results, err := findRecentAdminGrants(ctx, client, "example-org", false)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -1881,7 +1979,7 @@ func TestFindRecentAdminGrants_WrongOrgSkipped(t *testing.T) {
 	client, teardown := newTestClient(mux)
 	defer teardown()
 
-	results, err := findRecentAdminGrants(ctx, client, "example-org")
+	results, err := findRecentAdminGrants(ctx, client, "example-org", false)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -1899,7 +1997,7 @@ func TestFindRecentAdminGrants_APIError(t *testing.T) {
 	client, teardown := newTestClient(mux)
 	defer teardown()
 
-	_, err := findRecentAdminGrants(ctx, client, "example-org")
+	_, err := findRecentAdminGrants(ctx, client, "example-org", false)
 	if err == nil {
 		t.Error("expected error when audit log API returns 403, got nil")
 	}

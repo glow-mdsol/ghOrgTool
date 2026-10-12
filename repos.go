@@ -806,13 +806,18 @@ func listRepositoryCollaborators(ctx context.Context, client *github.Client, own
 }
 
 // adminGrantResult holds information about a single admin-access grant event
-// that occurred within the last 48 hours and whose access is still in effect.
+// that occurred within the recent lookback window.
 type adminGrantResult struct {
-	repo      string
-	login     string
-	actor     string
-	grantedAt time.Time
-	accessURL string
+	repo        string
+	login       string
+	actor       string
+	grantedAt   time.Time
+	accessURL   string
+	active      bool
+	currentPerm string
+	// revokedAt is zero when access is still active or no matching removal was found.
+	revokedAt time.Time
+	heldFor   time.Duration
 }
 
 // adminRemovalResult holds information about a single admin-access removal event
@@ -840,14 +845,16 @@ func adminGrantLookbackSince(now time.Time) time.Time {
 // getOrgRepos returns all repositories for the given organization.
 // findRecentAdminGrants queries the organisation audit log for repo.add_member
 // events in the recent lookback window where the permission granted was admin,
-// and confirms each user still holds that access.
+// and checks whether each user still holds that access. Grants that are no longer
+// active are dropped unless includeRevoked is set.
 //
 // Audit log approach: a handful of paginated API calls regardless of repo count,
 // versus the old per-repo event-scan which made O(repos) parallel calls.
 //
 // Requires the token to have org owner permissions (needed to read the audit log).
-func findRecentAdminGrants(ctx context.Context, client *github.Client, org string) ([]adminGrantResult, error) {
-	since := adminGrantLookbackSince(time.Now())
+func findRecentAdminGrants(ctx context.Context, client *github.Client, org string, includeRevoked bool) ([]adminGrantResult, error) {
+	now := time.Now()
+	since := adminGrantLookbackSince(now)
 	phrase := "action:repo.add_member"
 	order := "desc"
 
@@ -909,25 +916,47 @@ func findRecentAdminGrants(ctx context.Context, client *github.Client, org strin
 			}
 			seen[key] = true
 
-			// Confirm the user still holds admin on this repo (the grant may have been revoked).
-			current, _, permErr := client.Repositories.GetPermissionLevel(ctx, org, repoName, login)
-			if permErr != nil || current.GetPermission() != "admin" {
+			// Check whether the user still holds admin on this repo (the grant may have been revoked).
+			currentPerm := "none"
+			current, permResp, permErr := client.Repositories.GetPermissionLevel(ctx, org, repoName, login)
+			if permErr == nil {
+				currentPerm = current.GetPermission()
+			} else if !includeRevoked || permResp == nil || permResp.StatusCode != http.StatusNotFound {
+				if includeRevoked {
+					log.Printf("Skipping grant verification for %s/%s (%s): %v", org, repoName, login, permErr)
+				}
+				continue
+			}
+			active := currentPerm == "admin"
+			if !active && !includeRevoked {
 				continue
 			}
 
-			results = append(results, adminGrantResult{
-				repo:      repoName,
-				login:     login,
-				actor:     actor,
-				grantedAt: ts.Time,
-				accessURL: fmt.Sprintf("https://github.com/%s/%s/settings/access", org, repoName),
-			})
+			result := adminGrantResult{
+				repo:        repoName,
+				login:       login,
+				actor:       actor,
+				grantedAt:   ts.Time,
+				accessURL:   fmt.Sprintf("https://github.com/%s/%s/settings/access", org, repoName),
+				active:      active,
+				currentPerm: currentPerm,
+			}
+			if active {
+				result.heldFor = now.Sub(ts.Time)
+			}
+			results = append(results, result)
 		}
 
 		if done || resp == nil || resp.After == "" {
 			break
 		}
 		opts.After = resp.After
+	}
+
+	if includeRevoked {
+		if err := attachAdminRevocationTimes(ctx, client, org, since, results); err != nil {
+			return nil, err
+		}
 	}
 
 	sort.Slice(results, func(i, j int) bool {
@@ -937,6 +966,83 @@ func findRecentAdminGrants(ctx context.Context, client *github.Client, org strin
 		return results[i].login < results[j].login
 	})
 	return results, nil
+}
+
+// attachAdminRevocationTimes looks up repo.remove_member audit events for revoked
+// grants and sets revokedAt/heldFor using the first removal after each grant.
+func attachAdminRevocationTimes(ctx context.Context, client *github.Client, org string, since time.Time, results []adminGrantResult) error {
+	pending := make(map[string]int)
+	for i, r := range results {
+		if !r.active {
+			pending[r.repo+":"+r.login] = i
+		}
+	}
+	if len(pending) == 0 {
+		return nil
+	}
+
+	phrase := "action:repo.remove_member"
+	order := "desc"
+	opts := &github.GetAuditLogOptions{
+		Phrase:            &phrase,
+		Order:             &order,
+		ListCursorOptions: github.ListCursorOptions{PerPage: 100},
+	}
+
+	for {
+		entries, resp, err := client.Organizations.GetAuditLog(ctx, org, opts)
+		if err != nil {
+			return fmt.Errorf("failed to query audit log for removals: %w", err)
+		}
+
+		done := false
+		for _, entry := range entries {
+			ts := entry.GetCreatedAt().Time
+			if ts.Before(since) {
+				done = true
+				break
+			}
+			if entry.GetAction() != "repo.remove_member" {
+				continue
+			}
+			repoFull, _ := entry.AdditionalFields["repo"].(string)
+			parts := strings.SplitN(repoFull, "/", 2)
+			if len(parts) != 2 || parts[0] != org {
+				continue
+			}
+			idx, ok := pending[parts[1]+":"+entry.GetUser()]
+			if !ok {
+				continue
+			}
+			r := &results[idx]
+			// Entries are newest first, so keep overwriting to land on the earliest removal after the grant.
+			if !ts.Before(r.grantedAt) {
+				r.revokedAt = ts
+				r.heldFor = ts.Sub(r.grantedAt)
+			}
+		}
+
+		if done || resp == nil || resp.After == "" {
+			break
+		}
+		opts.After = resp.After
+	}
+	return nil
+}
+
+// formatAccessDuration renders a duration as e.g. "1d 3h 25m".
+func formatAccessDuration(d time.Duration) string {
+	if d < 0 {
+		d = 0
+	}
+	d = d.Truncate(time.Minute)
+	days := int(d / (24 * time.Hour))
+	hours := int((d % (24 * time.Hour)) / time.Hour)
+	minutes := int((d % time.Hour) / time.Minute)
+	if days > 0 {
+		return fmt.Sprintf("%dd %dh %dm", days, hours, minutes)
+	}
+	return fmt.Sprintf("%dh %dm", hours, minutes)
 }
 
 // findRecentAdminRemovals queries the organisation audit log for repo.remove_member
@@ -1044,35 +1150,57 @@ func findRecentAdminRemovals(ctx context.Context, client *github.Client, org str
 }
 
 // reportRecentAdminGrants formats the results of findRecentAdminGrants for display.
-func reportRecentAdminGrants(org string, results []adminGrantResult) string {
+func reportRecentAdminGrants(org string, results []adminGrantResult, includeRevoked bool) string {
 	if len(results) == 0 {
 		return fmt.Sprintf("No recent admin access grants detected across %s repositories.\n", org)
 	}
 	var b strings.Builder
-	fmt.Fprintf(&b, "Users granted recent admin access (still active) in %s:\n\n", org)
+	if includeRevoked {
+		activeCount := 0
+		for _, r := range results {
+			if r.active {
+				activeCount++
+			}
+		}
+		fmt.Fprintf(&b, "Users granted recent admin access in %s (%d added, %d still active):\n\n", org, len(results), activeCount)
+	} else {
+		fmt.Fprintf(&b, "Users granted recent admin access (still active) in %s:\n\n", org)
+	}
 	for i, r := range results {
-		fmt.Fprintf(&b, "%d. %s → %s\n   Granted by: %s\n   Granted: %s\n   Access settings: %s\n\n",
+		fmt.Fprintf(&b, "%d. %s → %s\n   Granted by: %s\n   Granted: %s\n",
 			i+1,
 			r.login,
 			r.repo,
 			r.actor,
 			r.grantedAt.UTC().Format("2006-01-02 15:04:05 UTC"),
-			r.accessURL,
 		)
+		switch {
+		case r.active:
+			fmt.Fprintf(&b, "   Status: active\n   Access held: %s (so far)\n", formatAccessDuration(r.heldFor))
+		case !r.revokedAt.IsZero():
+			fmt.Fprintf(&b, "   Status: revoked (current access: %s)\n   Revoked: %s\n   Access held: %s\n",
+				r.currentPerm,
+				r.revokedAt.UTC().Format("2006-01-02 15:04:05 UTC"),
+				formatAccessDuration(r.heldFor),
+			)
+		default:
+			fmt.Fprintf(&b, "   Status: revoked (current access: %s)\n   Access held: unknown (no removal event found)\n", r.currentPerm)
+		}
+		fmt.Fprintf(&b, "   Access settings: %s\n\n", r.accessURL)
 	}
 	return b.String()
 }
 
 // listRecentAdminGrants is the top-level command handler for --recent-admin-grants.
-func listRecentAdminGrants(ctx context.Context, client *github.Client, org string) error {
+func listRecentAdminGrants(ctx context.Context, client *github.Client, org string, includeRevoked bool) error {
 	now := time.Now()
 	since := adminGrantLookbackSince(now)
 	log.Printf("Scanning all repositories in %s for admin grants since %s...", org, since.UTC().Format("2006-01-02 15:04:05 UTC"))
-	results, err := findRecentAdminGrants(ctx, client, org)
+	results, err := findRecentAdminGrants(ctx, client, org, includeRevoked)
 	if err != nil {
 		return err
 	}
-	fmt.Print(reportRecentAdminGrants(org, results))
+	fmt.Print(reportRecentAdminGrants(org, results, includeRevoked))
 	return nil
 }
 

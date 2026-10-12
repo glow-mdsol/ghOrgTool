@@ -262,6 +262,7 @@ func main() {
 	var listRepoCollaborators = flag.Bool("list-repo-collaborators", false, "List collaborators on repository with permissions and added dates")
 	var listActionsStorage = flag.Bool("list-actions-storage", false, "List top 10 repositories by Actions cache usage and org billable constrained storage")
 	var recentAdminGrants = flag.Bool("recent-admin-grants", false, "List users recently granted admin access to any org repo (Monday runs include grants since previous Friday) that still have that access")
+	var includeRevoked = flag.Bool("include-revoked", false, "Optional with --recent-admin-grants: list all admin grants in the period, including those no longer active")
 	var recentAdminRemovals = flag.Bool("recent-admin-removals", false, "List users recently removed from admin access on org repos (same lookback window as recent-admin-grants)")
 	var describeTeam = flag.Bool("describe-team", false, "Show detailed summary of a team")
 	var userRepoAccess = flag.Bool("user-repo-access", false, "Report a user's effective access to a repository via team membership (requires --repo)")
@@ -280,6 +281,7 @@ func main() {
 	getopt.Alias("L", "list-repo-collaborators")
 	getopt.Alias("S", "list-actions-storage")
 	getopt.Alias("G", "recent-admin-grants")
+	getopt.Alias("I", "include-revoked")
 	getopt.Alias("M", "recent-admin-removals")
 	getopt.Alias("c", "find-common-teams")
 	getopt.Alias("r", "reset")
@@ -293,6 +295,10 @@ func main() {
 
 	if *dependabotGroupedPRsFlag && !*enableDependabotFlag {
 		log.Fatal("--dependabot-grouped-prs must be used with --enable-dependabot")
+	}
+
+	if *includeRevoked && !*recentAdminGrants {
+		log.Fatal("--include-revoked must be used with --recent-admin-grants")
 	}
 
 	if *initFlag {
@@ -326,6 +332,7 @@ func main() {
 		fmt.Println("                               List all collaborators on a repository (requires --repo)")
 		fmt.Println("  -S, --list-actions-storage   List top 10 repositories by Actions cache usage and org billable constrained storage")
 		fmt.Println("  -G, --recent-admin-grants    List users recently granted admin access to any org repo (Monday includes since Friday, still active)")
+		fmt.Println("  -I, --include-revoked        Optional with --recent-admin-grants: list all grants in the period, active or revoked")
 		fmt.Println("  -M, --recent-admin-removals  List users recently removed from admin access on any org repo (same lookback window)")
 		fmt.Println("  -c, --find-common-teams      Find teams with access to ALL specified repositories")
 		fmt.Println("  -u, --user-repo-access       Report a user's effective access to a repository via team membership (requires --repo)")
@@ -367,6 +374,8 @@ func main() {
 		fmt.Println("  ghOrgTool --list-actions-storage")
 		fmt.Println("\n  # List users recently granted admin access to any org repo")
 		fmt.Println("  ghOrgTool --recent-admin-grants")
+		fmt.Println("\n  # List all admin grants in the period, including revoked ones, with access duration")
+		fmt.Println("  ghOrgTool --recent-admin-grants --include-revoked")
 		fmt.Println("\n  # List users recently removed from admin access on any org repo")
 		fmt.Println("  ghOrgTool --recent-admin-removals")
 		fmt.Println("\n  # Find teams with access to multiple repositories")
@@ -425,7 +434,7 @@ func main() {
 	}
 
 	if *recentAdminGrants {
-		if err := listRecentAdminGrants(ctx, client, ORG); err != nil {
+		if err := listRecentAdminGrants(ctx, client, ORG, *includeRevoked); err != nil {
 			log.Printf("Error listing recent admin grants: %s", err)
 		}
 		return
