@@ -23,6 +23,9 @@ const DefaultOrgLogin = "example-org"
 const DefaultTeamName = "Default Team"
 const TokenEnvVar = "GITHUB_AUTH_TOKEN"
 
+// version follows semver: bump minor for new features, patch for fixes. Overridable via -ldflags "-X main.version=...".
+var version = "1.0.0"
+
 var DefaultAcceptableDomains = []string{"example.com", "example.org", "example.net"}
 
 // ORG is a runtime-resolved organization login loaded from config.
@@ -272,6 +275,7 @@ func main() {
 	var initFlag = flag.Bool("init", false, "Initialize configuration file")
 	var rotateTokenFlag = flag.Bool("rotate-token", false, "Rotate/update GitHub token in configuration")
 	var help = flag.Bool("help", false, "Print help")
+	var versionFlag = flag.Bool("version", false, "Print version")
 	getopt.Alias("s", "team")
 	getopt.Alias("R", "repo")
 	getopt.Alias("a", "add")
@@ -291,7 +295,13 @@ func main() {
 	getopt.Alias("i", "init")
 	getopt.Alias("t", "rotate-token")
 	getopt.Alias("h", "help")
+	getopt.Alias("v", "version")
 	getopt.Parse()
+
+	if *versionFlag {
+		fmt.Printf("ghOrgTool v%s\n", version)
+		os.Exit(0)
+	}
 
 	if *dependabotGroupedPRsFlag && !*enableDependabotFlag {
 		log.Fatal("--dependabot-grouped-prs must be used with --enable-dependabot")
@@ -316,7 +326,7 @@ func main() {
 	}
 
 	if *help {
-		fmt.Println("ghOrgTool - GitHub Organization Management Tool")
+		fmt.Printf("ghOrgTool v%s - GitHub Organization Management Tool\n", version)
 		fmt.Println("\nUSAGE:")
 		fmt.Println("  ghOrgTool [options] <usernames/emails or repository names>")
 		fmt.Println("\nUSER OPERATIONS:")
@@ -345,6 +355,7 @@ func main() {
 		fmt.Println("  -i, --init                   Initialize configuration file interactively")
 		fmt.Println("  -t, --rotate-token           Rotate/update GitHub token in configuration")
 		fmt.Println("  -h, --help                   Show this help message")
+		fmt.Println("  -v, --version                Print the tool version")
 		fmt.Println("\nEXAMPLES:")
 		fmt.Println("  # Initialize configuration (first time setup)")
 		fmt.Println("  ghOrgTool --init")

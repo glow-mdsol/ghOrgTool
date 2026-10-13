@@ -198,6 +198,8 @@ Usage of the tool is pretty simple
         Show detailed summary of a team (use with --team)
   -h, --help
         Print help
+  -v, --version
+        Print the tool version
   -L, --list-repo-collaborators
         List collaborators on repository with permissions and added dates (requires --repo)
   -S, --list-actions-storage

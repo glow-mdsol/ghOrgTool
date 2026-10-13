@@ -86,6 +86,8 @@ Key packages used:
 
 4. After your changes, run `go mod tidy` to keep `go.mod` / `go.sum` clean.
 
+5. Bump `version` in `main.go` following [semver](https://semver.org): minor for a new feature or flag, patch for a fix, major for a breaking CLI change.
+
 ### Adding a new CLI flag
 
 1. Declare it with `flag.Bool` / `flag.String` etc. near the top of `main()` in `main.go`.
@@ -138,6 +140,7 @@ go test -race ./...
    - New behaviour is covered by tests
    - `go vet ./...` reports no issues
    - `go mod tidy` leaves no diff in `go.mod` / `go.sum`
+   - `version` in `main.go` has been bumped appropriately
 
 ## Code Style
 
