@@ -86,7 +86,7 @@ Key packages used:
 
 4. After your changes, run `go mod tidy` to keep `go.mod` / `go.sum` clean.
 
-5. Bump `version` in `main.go` following [semver](https://semver.org): minor for a new feature or flag, patch for a fix, major for a breaking CLI change.
+5. Bump `version` in `main.go` following [semver](https://semver.org): minor for a new feature or flag, patch for a fix, major for a breaking CLI change. Add an entry to `CHANGELOG.md` under the new version.
 
 ### Adding a new CLI flag
 
@@ -120,6 +120,20 @@ go test -race ./...
 - Use `t.Setenv` to override `XDG_CONFIG_HOME` (or `APPDATA` on Windows) when testing config behaviour so tests never touch the real config file.
 - Table-driven tests are preferred for functions with multiple input/output cases.
 
+## Releasing
+
+Releases are published by [`.github/workflows/publish.yml`](.github/workflows/publish.yml) when a `v*.*.*` tag is pushed.
+
+1. Bump `version` in `main.go` and add the matching `## [X.Y.Z] - YYYY-MM-DD` section to `CHANGELOG.md`; merge to `main`.
+2. Tag the merged commit and push the tag:
+
+   ```bash
+   git tag v1.1.0
+   git push origin v1.1.0
+   ```
+
+The workflow fails if the tag doesn't match `version` in `main.go` or if `CHANGELOG.md` has no section for that version. On success it builds Linux, macOS (arm64) and Windows binaries, stamps the version into each, and creates a GitHub release with those binaries and the changelog notes.
+
 ## Submitting a Pull Request
 
 1. Push your branch to your fork:
@@ -140,7 +154,7 @@ go test -race ./...
    - New behaviour is covered by tests
    - `go vet ./...` reports no issues
    - `go mod tidy` leaves no diff in `go.mod` / `go.sum`
-   - `version` in `main.go` has been bumped appropriately
+   - `version` in `main.go` has been bumped appropriately and `CHANGELOG.md` is updated
 
 ## Code Style
 

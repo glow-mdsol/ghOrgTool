@@ -23,6 +23,7 @@ It will use the SSO connection to link a user email to an account, but the user 
   ```
   export PATH="~/go/bin:$PATH"
   ```
+* Or download a prebuilt binary for Linux, macOS (Apple silicon) or Windows from the [Releases page](https://github.com/glow-mdsol/ghOrgTool/releases).
 
 ## Configuration
 
@@ -194,6 +195,8 @@ Usage of the tool is pretty simple
       Report repositories where users have effective admin access via teams or direct collaborator links (optionally filtered to one user)
   -c, --find-common-teams
         Find teams that have access to ALL specified repositories
+  -C, --find-common-teams-clipboard
+        As -c, but repository names are taken from the clipboard text (URLs are unwrapped, non-repo words are skipped after an org lookup)
   -d, --describe-team
         Show detailed summary of a team (use with --team)
   -h, --help
@@ -433,6 +436,13 @@ Or, via email
 
 #### Team Matching
 Find teams that match a set of requested repos (or teans that are a close match)
+
+Pass repository names (or GitHub URLs) as arguments with `--find-common-teams`, or copy them to the clipboard and use `--find-common-teams-clipboard`:
+```
+# Copy a list of repository names or URLs, then:
+ghOrgTool --find-common-teams-clipboard
+```
+The clipboard text is split on whitespace, commas, semicolons and brackets, GitHub URLs are unwrapped to repository names, and duplicates are dropped. Anything the organisation doesn't recognise as a repository is skipped with a warning.
 
 ##### Case 1: Exact and Close Matches Found
 ```

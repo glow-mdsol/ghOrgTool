@@ -10,7 +10,9 @@ import (
 	"os"
 	"os/user"
 	"path/filepath"
+	"regexp"
 	"strings"
+	"unicode"
 
 	"github.com/google/go-github/v84/github"
 	"github.com/jdxcode/netrc"
@@ -24,7 +26,7 @@ const DefaultTeamName = "Default Team"
 const TokenEnvVar = "GITHUB_AUTH_TOKEN"
 
 // version follows semver: bump minor for new features, patch for fixes. Overridable via -ldflags "-X main.version=...".
-var version = "1.0.0"
+var version = "1.1.0"
 
 var DefaultAcceptableDomains = []string{"example.com", "example.org", "example.net"}
 
@@ -250,6 +252,33 @@ func normalizeEntityArgument(arg string) string {
 	return trimmed
 }
 
+// repoNamePattern matches the characters and length GitHub allows in repository names.
+var repoNamePattern = regexp.MustCompile(`^[A-Za-z0-9._-]{1,100}$`)
+
+// extractRepoNameCandidates pulls repository-shaped names out of free text (e.g. the clipboard).
+// Tokens are split on whitespace and list/markup separators, GitHub URLs are unwrapped, and
+// duplicates (case-insensitive) are dropped. Existence in the org is checked by the caller.
+func extractRepoNameCandidates(text string) []string {
+	isSeparator := func(r rune) bool {
+		return unicode.IsSpace(r) || strings.ContainsRune(",;|<>\"'()[]{}", r)
+	}
+	seen := make(map[string]struct{})
+	var candidates []string
+	for _, token := range strings.FieldsFunc(text, isSeparator) {
+		name := strings.TrimRight(normalizeEntityArgument(token), ".")
+		if !repoNamePattern.MatchString(name) {
+			continue
+		}
+		key := strings.ToLower(name)
+		if _, exists := seen[key]; exists {
+			continue
+		}
+		seen[key] = struct{}{}
+		candidates = append(candidates, name)
+	}
+	return candidates
+}
+
 // Go time!
 func main() {
 	ORG = getOrgLogin()
@@ -258,6 +287,7 @@ func main() {
 	var repoName = flag.String("repo", "", "Repository name for repo operations")
 	var resetFlag = flag.Bool("reset", false, "Generate the Reset link")
 	var findCommonTeams = flag.Bool("find-common-teams", false, "Find teams that have access to ALL specified repositories")
+	var findCommonTeamsClipboard = flag.Bool("find-common-teams-clipboard", false, "Find teams that have access to ALL repositories whose names are found in the clipboard text")
 	var addToTM = flag.Bool("add", false, "Add User to Team")
 	var addRepoAdmin = flag.Bool("add-repo-admin", false, "Add user as admin collaborator to repository")
 	var enableDependabotFlag = flag.Bool("enable-dependabot", false, "Enable Dependabot alerts and security updates on one or more repositories")
@@ -288,6 +318,7 @@ func main() {
 	getopt.Alias("I", "include-revoked")
 	getopt.Alias("M", "recent-admin-removals")
 	getopt.Alias("c", "find-common-teams")
+	getopt.Alias("C", "find-common-teams-clipboard")
 	getopt.Alias("r", "reset")
 	getopt.Alias("d", "describe-team")
 	getopt.Alias("u", "user-repo-access")
@@ -345,6 +376,8 @@ func main() {
 		fmt.Println("  -I, --include-revoked        Optional with --recent-admin-grants: list all grants in the period, active or revoked")
 		fmt.Println("  -M, --recent-admin-removals  List users recently removed from admin access on any org repo (same lookback window)")
 		fmt.Println("  -c, --find-common-teams      Find teams with access to ALL specified repositories")
+		fmt.Println("  -C, --find-common-teams-clipboard")
+		fmt.Println("                               As -c, but repository names are taken from the clipboard text")
 		fmt.Println("  -u, --user-repo-access       Report a user's effective access to a repository via team membership (requires --repo)")
 		fmt.Println("  -U, --admin-user-report      Report repositories where users have effective admin access via teams or direct collaborator links")
 		fmt.Println("\nOPTIONS:")
@@ -391,6 +424,8 @@ func main() {
 		fmt.Println("  ghOrgTool --recent-admin-removals")
 		fmt.Println("\n  # Find teams with access to multiple repositories")
 		fmt.Println("  ghOrgTool --find-common-teams repo1 repo2 repo3")
+		fmt.Println("\n  # Find teams with access to every repository named in the clipboard text")
+		fmt.Println("  ghOrgTool --find-common-teams-clipboard")
 		fmt.Println("\n  # Show detailed summary of a team")
 		fmt.Println("  ghOrgTool --describe-team --team 'Engineering Team'")
 		fmt.Println("\n  # Report repos where any user has admin access via teams")
@@ -609,13 +644,31 @@ func main() {
 		return
 	}
 
-	if *findCommonTeams {
-		// All arguments should be repository names
+	if *findCommonTeams || *findCommonTeamsClipboard {
+		// Candidates come from the positional arguments and, if requested, the clipboard text
+		candidates := userOrRepoList
+		if *findCommonTeamsClipboard {
+			text, err := readClipboard()
+			if err != nil {
+				log.Fatalf("Unable to read the clipboard: %s", err)
+			}
+			fromClipboard := extractRepoNameCandidates(text)
+			log.Printf("Found %d repository name candidate(s) on the clipboard: %s", len(fromClipboard), strings.Join(fromClipboard, ", "))
+			candidates = append(append([]string{}, candidates...), fromClipboard...)
+		}
+
+		// All candidates should be repository names; drop duplicates so each repo is counted once
 		var repoNames []string
-		for _, entitySlug := range userOrRepoList {
+		seen := make(map[string]struct{})
+		for _, entitySlug := range candidates {
 			if entitySlug == "" {
 				continue
 			}
+			key := strings.ToLower(entitySlug)
+			if _, exists := seen[key]; exists {
+				continue
+			}
+			seen[key] = struct{}{}
 			if !isRepository(ctx, client, ORG, entitySlug) {
 				log.Printf("Warning: '%s' is not a valid repository in organization '%s', skipping", entitySlug, ORG)
 				continue
