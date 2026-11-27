@@ -1,6 +1,6 @@
-# CLAUDE.md
+# AGENTS.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+This file provides guidance to AI coding agents and human contributors working with code in this repository.
 
 ## What this is
 
@@ -59,3 +59,8 @@ Everything lives in `package main` at the repo root:
 
 - `log.Fatal` is reserved for `main.go` top-level dispatch — library-style functions in the other files should return errors instead.
 - Untracked `admin-user-report.checkpoint` and `admin-users.csv` files in the repo root are local run artifacts from `--admin-user-report`/`--checkpoint-file`, not project files — don't treat them as source.
+
+## Release directives
+
+- When a feature or flag is complete, bump `version` in `main.go` following semver: minor for a new feature or flag, patch for a fix, major for a breaking CLI change. Do this in the same change as the feature.
+- Record every user-visible change under `## [Unreleased]` in `CHANGELOG.md` and move those entries under the new version heading when bumping.

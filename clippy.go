@@ -14,3 +14,11 @@ func prompt(content string) {
 	}
 
 }
+
+// readClipboard returns the current clipboard text.
+func readClipboard() (string, error) {
+	if err := clipboard.Init(); err != nil {
+		return "", err
+	}
+	return string(clipboard.Read(clipboard.FmtText)), nil
+}

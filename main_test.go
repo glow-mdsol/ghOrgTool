@@ -62,6 +62,53 @@ func TestNormalizeEntityArgument_NonURLUnchanged(t *testing.T) {
 	}
 }
 
+func TestExtractRepoNameCandidates(t *testing.T) {
+	tests := []struct {
+		name string
+		text string
+		want []string
+	}{
+		{
+			name: "whitespace, commas and newlines",
+			text: "repo-a, repo_b;repo.c\nrepo-a\trepo-d",
+			want: []string{"repo-a", "repo_b", "repo.c", "repo-d"},
+		},
+		{
+			name: "GitHub URLs are unwrapped",
+			text: "https://github.com/example-org/my-repo, <https://github.com/example-org/other|other>",
+			want: []string{"my-repo", "other"},
+		},
+		{
+			name: "duplicates ignored case-insensitively",
+			text: "My-Repo my-repo MY-REPO",
+			want: []string{"My-Repo"},
+		},
+		{
+			name: "non repository-shaped tokens dropped",
+			text: "see: repo-x! (repo-y). 'repo/z' ünïcode",
+			want: []string{"repo-y"},
+		},
+		{
+			name: "empty text",
+			text: "  \n\t ",
+			want: nil,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := extractRepoNameCandidates(tt.text)
+			if len(got) != len(tt.want) {
+				t.Fatalf("extractRepoNameCandidates(%q) = %v, want %v", tt.text, got, tt.want)
+			}
+			for i := range got {
+				if got[i] != tt.want[i] {
+					t.Fatalf("extractRepoNameCandidates(%q) = %v, want %v", tt.text, got, tt.want)
+				}
+			}
+		})
+	}
+}
+
 // ---------------------------------------------------------------------------
 // contains
 // ---------------------------------------------------------------------------
